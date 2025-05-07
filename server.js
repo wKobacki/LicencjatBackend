@@ -93,6 +93,9 @@ const transporter = nodemailer.createTransport({
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS
+    },
+    tls: {
+        rejectUnauthorized: false
     }
 });
 
@@ -235,6 +238,33 @@ app.post('/verify-email',
         });
     });
 
+app.post('/verify-reset-code', [
+    body('email').isEmail().withMessage('Nieprawidłowy adres e-mail'),
+    body('code').isLength({ min: 6, max: 6 }).withMessage('Kod musi mieć 6 cyfr'),
+], (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ message: 'Błędne dane wejściowe', errors: errors.array() });
+    }
+
+    const { email, code } = req.body;
+
+    db.query('SELECT * FROM reset_tokens WHERE email = ? AND code = ?', [email, code], (err, results) => {
+        if (err || results.length === 0) {
+            return res.status(400).json({ success: false, message: 'Nieprawidłowy kod.' });
+        }
+
+        const token = results[0];
+        if (new Date() > token.expiresAt) {
+            db.query('DELETE FROM reset_tokens WHERE email = ?', [email]);
+            return res.status(400).json({ success: false, message: 'Kod wygasł.' });
+        }
+
+        return res.status(200).json({ success: true, message: 'Kod poprawny' });
+    });
+});
+
+
 // Ponowne wysyłanie kodu weryfikacyjnego
 app.post('/resend-verification-code',
     [
@@ -343,7 +373,7 @@ app.post('/forgot-password',
 
                     transporter.sendMail(mailOptions, (error, info) => {
                         if (error) return res.status(500).json({ message: 'Błąd podczas wysyłania e-maila z kodem resetu hasła.' });
-                        res.status(200).json({ message: 'Kod resetu hasła został wysłany na Twój adres e-mail.' });
+                        res.status(200).json({ success: true, message: 'Kod resetu hasła został wysłany na Twój adres e-mail.' });
                     });
                 });
         });
@@ -357,12 +387,14 @@ app.post('/reset-password',
         body('newPassword').isLength({ min: 6 }).withMessage('Nowe hasło musi mieć co najmniej 6 znaków'),
     ],
     async (req, res) => {
+        const { email, code, newPassword } = req.body;
+
+        console.log('Dane wejściowe:', { email, code, newPassword }); // ← poprawny log
+
         const errors = validationResult(req);
         if (!errors.isEmpty()) {
             return res.status(400).json({ message: 'Błędne dane wejściowe', errors: errors.array() });
         }
-
-        const { email, code, newPassword } = req.body;
 
         db.query('SELECT * FROM reset_tokens WHERE email = ? AND code = ?', [email, code], async (err, results) => {
             if (err || results.length === 0) return res.status(400).json({ message: 'Błędny kod weryfikacyjny.' });
@@ -463,7 +495,6 @@ app.post('/submitProblem', upload.array('images', 3), authenticateUser,
         });
     });
 
-// Pobieranie problemów
 // Pobieranie problemów
 app.get('/problems', authenticateUser, (req, res) => {
     const userEmail = req.user.email;
@@ -951,13 +982,18 @@ app.put('/admin/:type/:id/archive', authenticateAdmin, (req, res) => {
 });
 
 // Aktualizacja roli użytkownika
-app.put('/admin/users/:id/role', authenticateAdmin, (req, res) => {
-    const userId = parseInt(req.params.id);
+app.put('/admin/users/:id/role', authenticateUser, (req, res) => {
     const { role } = req.body;
+    const id = parseInt(req.params.id, 10); // <-- dodaj to
+    if (!role) return res.status(400).json({ message: 'Brak nowej roli.' });
 
-    db.query('UPDATE users SET role = ? WHERE id = ?', [role, userId], (err) => {
-        if (err) return res.status(500).json({ message: 'Błąd bazy danych' });
-        res.status(200).json({ message: 'Rola użytkownika zaktualizowana pomyślnie' });
+    const sql = 'UPDATE users SET role = ? WHERE id = ?';
+    db.query(sql, [role, id], (err, result) => {
+        if (err) {
+            console.error('Błąd bazy danych przy zmianie roli:', err); // Dodaj do debugowania
+            return res.status(500).json({ message: 'Błąd bazy danych.' });
+        }
+        res.status(200).json({ message: 'Rola zmieniona.' });
     });
 });
 
@@ -984,51 +1020,66 @@ app.put('/admin/users/:id/block', authenticateAdmin, (req, res) => {
 });
 
 //usuwanie użytkowników
-app.delete('/admin/users/:id', authenticateAdmin, (req, res) => {
-    const userId = parseInt(req.params.id, 10);
-    console.log(`Received request to delete user with ID: ${userId}, Type: ${typeof userId}`);
+app.delete('/admin/users/:id', authenticateUser, (req, res) => {
+    const userId = req.params.id;
 
-    // Sprawdzenie, czy ID jest poprawne
-    if (isNaN(userId) || userId <= 0) {
-        console.error(`Invalid ID format: ${req.params.id}`);
-        return res.status(400).json({ message: 'Invalid ID format' });
-    }
-
-    db.query('DELETE FROM users WHERE id = ?', [userId], (err, result) => {
-        if (err) {
-            console.error('Database error:', err);
-            return res.status(500).json({ message: 'Database error' });
+    const getEmail = 'SELECT email FROM users WHERE id = ?';
+    db.query(getEmail, [userId], (err, results) => {
+        if (err || results.length === 0) {
+            return res.status(404).json({ message: 'Nie znaleziono użytkownika' });
         }
 
-        if (result.affectedRows === 0) {
-            console.warn(`No user found with ID: ${userId}`);
-            return res.status(404).json({ message: 'User not found' });
-        }
+        const userEmail = results[0].email;
 
-        console.log(`User with ID: ${userId} deleted successfully.`);
-        return res.status(200).json({ message: 'User deleted successfully' });
+        db.beginTransaction(err => {
+            if (err) return res.status(500).json({ message: 'Błąd transakcji' });
+
+            const steps = [
+                // Usuń najpierw polubienia powiązane z komentarzami użytkownika
+                [
+                    `DELETE FROM comment_likes 
+                        WHERE comment_id IN (
+                            SELECT id FROM comments WHERE author_email = ?
+                        )`, [userEmail]
+                ],
+                ['DELETE FROM comment_likes WHERE user_email = ?', [userEmail]],
+                ['DELETE FROM comments WHERE author_email = ?', [userEmail]],
+                ['DELETE FROM votes_problems WHERE user_email = ?', [userEmail]],
+                ['DELETE FROM votes_ideas WHERE user_email = ?', [userEmail]],
+                ['DELETE FROM ideas WHERE author_email = ?', [userEmail]],
+                ['DELETE FROM problems WHERE author_email = ?', [userEmail]],
+                ['DELETE FROM users WHERE id = ?', [userId]],
+            ];
+
+            let i = 0;
+            const next = () => {
+                if (i >= steps.length) {
+                    return db.commit(err => {
+                        if (err) return db.rollback(() => res.status(500).json({ message: 'Błąd commit' }));
+                        res.status(200).json({ message: 'Użytkownik i dane powiązane usunięte.' });
+                    });
+                }
+                const [query, params] = steps[i++];
+                db.query(query, params, (err) => {
+                    if (err) {
+                        console.error('Błąd zapytania SQL:', query, err);
+                        return db.rollback(() => res.status(500).json({ message: `Błąd zapytania: ${query}` }));
+                    }
+                    next();
+                });
+            };
+
+            next();
+        });
     });
 });
+
 
 // Pobieranie użytkowników
 app.get('/admin/users', authenticateAdmin, (req, res) => {
     db.query('SELECT id, email, role, name, surname, branch, isVerified, isBlocked FROM users', (err, results) => {
         if (err) return res.status(500).json({ message: 'Błąd bazy danych' });
         res.status(200).json(results);
-    });
-});
-
-// Resetowanie głosów dla wszystkich użytkowników
-app.put('/admin/users/reset_votes', authenticateAdmin, (req, res) => {
-    db.query('DELETE FROM user_votes', (err) => {
-        if (err) return res.status(500).json({ message: 'Błąd bazy danych' });
-        db.query('UPDATE problems SET votes = 0', (err) => {
-            if (err) return res.status(500).json({ message: 'Błąd bazy danych' });
-            db.query('UPDATE ideas SET votes = 0', (err) => {
-                if (err) return res.status(500).json({ message: 'Błąd bazy danych' });
-                res.status(200).json({ message: 'Głosy wszystkich użytkowników zostały zresetowane.' });
-            });
-        });
     });
 });
 
@@ -1092,6 +1143,7 @@ app.post('/comments', authenticateUser, (req, res) => {
 // Pobieranie komentarzy (zagnieżdżone)
 app.get('/comments', authenticateUser, (req, res) => {
     const { item_id, item_type } = req.query;
+    const userEmail = req.user.email;
 
     if (!item_id || !item_type) {
         return res.status(400).json({ message: 'Brakuje parametrów zapytania' });
@@ -1101,21 +1153,36 @@ app.get('/comments', authenticateUser, (req, res) => {
     db.query(sql, [item_id, item_type], (err, results) => {
         if (err) return res.status(500).json({ message: 'Błąd bazy danych' });
 
-        const nestComments = (comments, parentId = null) =>
-            comments
-                .filter(c => c.parent_id === parentId)
-                .map(c => ({
-                    ...c,
-                    replies: nestComments(comments, c.id)
-                }));
+        const commentIds = results.map(c => c.id);
+        if (commentIds.length === 0) return res.json([]);
 
-        res.json(nestComments(results));
+        const likeQuery = 'SELECT comment_id FROM comment_likes WHERE user_email = ? AND comment_id IN (?)';
+        db.query(likeQuery, [userEmail, commentIds], (err2, likedResults) => {
+            if (err2) return res.status(500).json({ message: 'Błąd przy sprawdzaniu polubień' });
+
+            const likedCommentIds = likedResults.map(row => row.comment_id);
+
+            const resultsWithFlags = results.map(c => ({
+                ...c,
+                likedByCurrentUser: likedCommentIds.includes(c.id)
+            }));
+
+            const nestComments = (comments, parentId = null) =>
+                comments
+                    .filter(c => c.parent_id === parentId)
+                    .map(c => ({
+                        ...c,
+                        replies: nestComments(comments, c.id)
+                    }));
+
+            res.json(nestComments(resultsWithFlags));
+        });
     });
 });
 
-app.post('/comments/:id/like', (req, res) => {
+app.post('/comments/:id/like', authenticateUser, (req, res) => {
     const commentId = req.params.id;
-    const userEmail = req.headers['x-user-email'];
+    const userEmail = req.user.email;
 
     if (!userEmail) return res.status(401).json({ message: 'Brak e-maila użytkownika.' });
 
@@ -1140,6 +1207,30 @@ app.post('/comments/:id/like', (req, res) => {
         });
     });
 });
+
+app.delete('/comments/:id/like', authenticateUser, (req, res) => {
+    const commentId = req.params.id;
+    const userEmail = req.user.email;
+
+    if (!userEmail) return res.status(401).json({ message: 'Brak e-maila użytkownika.' });
+
+    const deleteLike = 'DELETE FROM comment_likes WHERE comment_id = ? AND user_email = ?';
+    db.query(deleteLike, [commentId, userEmail], (err, result) => {
+        if (err) return res.status(500).json({ message: 'Błąd usuwania polubienia.' });
+
+        if (result.affectedRows === 0) {
+            return res.status(400).json({ message: 'Nie masz polubienia na tym komentarzu.' });
+        }
+
+        const updateLikes = 'UPDATE comments SET likes = likes - 1 WHERE id = ? AND likes > 0';
+        db.query(updateLikes, [commentId], (err2) => {
+            if (err2) return res.status(500).json({ message: 'Błąd aktualizacji liczby polubień.' });
+
+            return res.status(200).json({ message: 'Polubienie cofnięte.' });
+        });
+    });
+});
+
 
 // Wylogowanie użytkownika
 app.post('/logout', authenticateUser, (req, res) => {
