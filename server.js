@@ -1119,7 +1119,15 @@ app.get('/comments', (req, res) => {
         return res.status(400).json({ message: 'Brakuje parametrów zapytania' });
     }
 
-    const sql = 'SELECT * FROM comments WHERE item_id = ? AND item_type = ? ORDER BY created_at ASC';
+    const sql = `
+        SELECT c.*, COUNT(l.comment_id) AS likes
+        FROM comments c
+        LEFT JOIN comment_likes l ON c.id = l.comment_id
+        WHERE c.item_id = ? AND c.item_type = ?
+        GROUP BY c.id
+        ORDER BY c.created_at ASC
+    `;
+
     db.query(sql, [item_id, item_type], (err, results) => {
         if (err) {
             console.error('Błąd bazy danych (SELECT comments):', err);
@@ -1129,20 +1137,30 @@ app.get('/comments', (req, res) => {
         const commentIds = results.map(c => c.id);
         if (commentIds.length === 0) return res.json([]);
 
-        if (!userEmail) {
-            const nestComments = (comments, parentId = null) =>
-                comments
-                    .filter(c => c.parent_id === parentId)
-                    .map(c => ({
-                        ...c,
-                        likedByCurrentUser: false,
-                        replies: nestComments(comments, c.id)
-                    }));
+        const attachReplies = (comments, parentId = null) =>
+            comments
+                .filter(c => c.parent_id === parentId)
+                .map(c => ({
+                    ...c,
+                    replies: attachReplies(comments, c.id)
+                }));
 
-            return res.json(nestComments(results));
+        if (!userEmail) {
+            const withDefaultFlags = results.map(c => ({
+                ...c,
+                likedByCurrentUser: false,
+                likes: Number(c.likes) || 0
+            }));
+
+            return res.json(attachReplies(withDefaultFlags));
         }
 
-        const likeQuery = 'SELECT comment_id FROM comment_likes WHERE user_email = ? AND comment_id IN (?)';
+        const likeQuery = `
+            SELECT comment_id
+            FROM comment_likes
+            WHERE user_email = ? AND comment_id IN (?)
+        `;
+
         db.query(likeQuery, [userEmail, commentIds], (err2, likedResults) => {
             if (err2) {
                 console.error('Błąd przy sprawdzaniu polubień:', err2);
@@ -1153,21 +1171,15 @@ app.get('/comments', (req, res) => {
 
             const resultsWithFlags = results.map(c => ({
                 ...c,
-                likedByCurrentUser: likedCommentIds.includes(c.id)
+                likedByCurrentUser: likedCommentIds.includes(c.id),
+                likes: Number(c.likes) || 0
             }));
 
-            const nestComments = (comments, parentId = null) =>
-                comments
-                    .filter(c => c.parent_id === parentId)
-                    .map(c => ({
-                        ...c,
-                        replies: nestComments(comments, c.id)
-                    }));
-
-            res.json(nestComments(resultsWithFlags));
+            return res.json(attachReplies(resultsWithFlags));
         });
     });
 });
+
 
 //glosowanie na kom
 app.post('/comments/:id/like', authenticateUser, (req, res) => {
