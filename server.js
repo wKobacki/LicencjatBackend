@@ -54,7 +54,6 @@ function parseImagesField(imagesField) {
                 console.error('Błąd podczas parsowania JSON w images:', e);
             }
         }
-        // Jeśli to pojedynczy string zaczynający się od '/uploads/'
         if (imagesField.startsWith('/uploads/')) {
             return [imagesField];
         }
@@ -101,22 +100,27 @@ const transporter = nodemailer.createTransport({
 // Middleware do uwierzytelniania użytkownika
 function authenticateUser(req, res, next) {
     const userEmail = req.headers['x-user-email'];
-    console.log('Nagłówek x-user-email:', userEmail); // ← SPRAWDŹ CO LECI
 
     if (!userEmail) {
         return res.status(401).json({ message: 'Brak uwierzytelnienia' });
     }
 
     db.query('SELECT * FROM users WHERE email = ?', [userEmail], (err, results) => {
-        if (err || results.length === 0) {
-            console.log('Nie znaleziono użytkownika:', userEmail);
+        if (err) {
+            console.error('Błąd podczas sprawdzania użytkownika:', err);
+            return res.status(500).json({ message: 'Błąd serwera przy uwierzytelnieniu' });
+        }
+
+        if (results.length === 0) {
+            console.warn('Nie znaleziono użytkownika:', userEmail);
             return res.status(403).json({ message: 'Brak dostępu' });
         }
 
-        req.user = results[0];
+        req.user = { email: results[0].email }; 
         next();
     });
 }
+
 
 // Middleware do autoryzacji admina
 function authenticateAdmin(req, res, next) {
@@ -282,7 +286,6 @@ app.post('/resend-verification-code',
 
         const { email } = req.body;
 
-        // Sprawdź, czy użytkownik istnieje i nie jest już zweryfikowany
         db.query('SELECT * FROM users WHERE email = ?', [email], (err, results) => {
             if (err) return res.status(500).json({ message: 'Błąd bazy danych' });
             if (results.length === 0) return res.status(404).json({ message: 'Użytkownik nie znaleziony.' });
@@ -294,9 +297,8 @@ app.post('/resend-verification-code',
             }
 
             const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
-            const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // Kod ważny przez 1 godzinę
+            const expiresAt = new Date(Date.now() + 60 * 60 * 1000); 
 
-            // Zapisz lub zaktualizuj kod weryfikacyjny w bazie danych
             db.query('INSERT INTO verification_codes (email, code, expiresAt) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE code = ?, expiresAt = ?',
                 [email, verificationCode, expiresAt, verificationCode, expiresAt], (err) => {
                     if (err) return res.status(500).json({ message: 'Błąd bazy danych podczas generowania kodu' });
@@ -362,7 +364,7 @@ app.post('/forgot-password',
             if (err || results.length === 0) return res.status(404).json({ message: 'Użytkownik nie znaleziony.' });
 
             const code = Math.floor(100000 + Math.random() * 900000);
-            const expiresAt = new Date(Date.now() + 3600000); // Ważność kodu: 1 godzina
+            const expiresAt = new Date(Date.now() + 3600000); 
 
             db.query('INSERT INTO reset_tokens (email, code, expiresAt) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE code = ?, expiresAt = ?',
                 [email, code, expiresAt, code, expiresAt], (err) => {
@@ -393,7 +395,7 @@ app.post('/reset-password',
     async (req, res) => {
         const { email, code, newPassword } = req.body;
 
-        console.log('Dane wejściowe:', { email, code, newPassword }); // ← poprawny log
+        console.log('Dane wejściowe:', { email, code, newPassword }); 
 
         const errors = validationResult(req);
         if (!errors.isEmpty()) {
@@ -429,7 +431,6 @@ app.post('/submitIdea', upload.array('images', 3), authenticateUser,
     (req, res) => {
         const errors = validationResult(req);
         if (!errors.isEmpty()) {
-            // Usuń przesłane pliki w przypadku błędu walidacji
             if (req.files) {
                 req.files.forEach(file => {
                     fs.unlinkSync(file.path);
@@ -469,7 +470,6 @@ app.post('/submitProblem', upload.array('images', 3), authenticateUser,
     (req, res) => {
         const errors = validationResult(req);
         if (!errors.isEmpty()) {
-            // Usuń przesłane pliki w przypadku błędu walidacji
             if (req.files) {
                 req.files.forEach(file => {
                     fs.unlinkSync(file.path);
@@ -613,7 +613,6 @@ app.get('/ideas', (req, res) => {
         const ideaIds = results.map(idea => idea.id);
 
         if (ideaIds.length > 0) {
-            // Użycie votes_ideas zamiast user_votes
             db.query(
                 'SELECT idea_id FROM votes_ideas WHERE user_email = ? AND idea_id IN (?)',
                 [userEmail, ideaIds],
@@ -631,7 +630,6 @@ app.get('/ideas', (req, res) => {
                         return { ...idea, images, hasVoted };
                     });
 
-                    // Zliczenie głosów użytkownika tylko na pomysły w statusie in_voting
                     db.query(
                         `SELECT COUNT(*) AS voteCount 
                          FROM votes_ideas 
@@ -947,7 +945,7 @@ app.put('/admin/:type/:id/archive', authenticateAdmin, (req, res) => {
 // Aktualizacja roli użytkownika
 app.put('/admin/users/:id/role', authenticateUser, (req, res) => {
     const { role } = req.body;
-    const id = parseInt(req.params.id, 10); // <-- dodaj to
+    const id = parseInt(req.params.id, 10); 
     if (!role) return res.status(400).json({ message: 'Brak nowej roli.' });
 
     const sql = 'UPDATE users SET role = ? WHERE id = ?';
@@ -1132,7 +1130,6 @@ app.get('/comments', (req, res) => {
         if (commentIds.length === 0) return res.json([]);
 
         if (!userEmail) {
-            // jeśli nie ma emaila użytkownika, zwracamy bez informacji o polubieniach
             const nestComments = (comments, parentId = null) =>
                 comments
                     .filter(c => c.parent_id === parentId)
@@ -1172,7 +1169,8 @@ app.get('/comments', (req, res) => {
     });
 });
 
-app.post('/comments/:id/like', (req, res) => {
+//glosowanie na kom
+app.post('/comments/:id/like', authenticateUser, (req, res) => {
     const commentId = req.params.id;
     const userEmail = req.user.email;
 
@@ -1200,7 +1198,8 @@ app.post('/comments/:id/like', (req, res) => {
     });
 });
 
-app.delete('/comments/:id/like', (req, res) => {
+//usuwanie głosu na kom
+app.delete('/comments/:id/like', authenticateUser, (req, res) => {
     const commentId = req.params.id;
     const userEmail = req.user.email;
 
