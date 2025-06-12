@@ -41,7 +41,6 @@ function parseImagesField(imagesField) {
     if (!imagesField) return [];
     if (Array.isArray(imagesField)) return imagesField;
     if (typeof imagesField === 'string') {
-        // Jeśli to już jest JSON array
         if (imagesField.startsWith('[')) {
             try {
                 const parsed = JSON.parse(imagesField);
@@ -141,7 +140,7 @@ function authenticateAdmin(req, res, next) {
     });
 }
 
-// Rejestracja nowego użytkownika z walidacją i hashowaniem hasła
+// Rejestracja nowego użytkownika 
 app.post('/register',
     [
         body('email').isEmail().withMessage('Nieprawidłowy adres e-mail'),
@@ -529,58 +528,51 @@ app.get('/problems', (req, res) => {
             return res.status(500).json({ message: 'Błąd bazy danych' });
         }
 
-        const problemIds = results.map(problem => problem.id);
+        const problemIds = results.map(p => p.id);
 
-        if (problemIds.length > 0) {
-            db.query(
-                'SELECT problem_id FROM votes_problems WHERE user_email = ? AND problem_id IN (?)',
-                [userEmail, problemIds],
-                (err, voteResults) => {
-                    if (err) {
-                        console.error('Błąd pobierania głosów użytkownika:', err);
-                        return res.status(500).json({ message: 'Błąd bazy danych' });
-                    }
-
-                    const votedProblemIds = voteResults.map(vote => vote.problem_id);
-
-                    const problems = results.map(problem => {
-                        const images = parseImagesField(problem.images);
-                        const hasVoted = votedProblemIds.includes(problem.id);
-                        return { ...problem, images, hasVoted };
-                    });
-
-                    db.query(
-                        `SELECT COUNT(*) AS voteCount 
-                         FROM votes_problems 
-                         JOIN problems ON votes_problems.problem_id = problems.id 
-                         WHERE votes_problems.user_email = ? AND problems.status = 'in_voting'`,
-                        [userEmail],
-                        (err, voteCountResult) => {
-                            if (err) {
-                                console.error('Błąd pobierania liczby głosów:', err);
-                                return res.status(500).json({ message: 'Błąd bazy danych' });
-                            }
-
-                            const voteCount = voteCountResult[0].voteCount;
-
-                            res.json({
-                                problems,
-                                userVoteCount: voteCount
-                            });
-                        }
-                    );
-                }
-            );
-        } else {
-            res.json({
-                problems: results.map(problem => ({ ...problem, hasVoted: false })),
-                userVoteCount: 0
-            });
+        if (problemIds.length === 0) {
+            return res.json({ problems: [], userVoteCount: 0 });
         }
+
+        db.query(
+            'SELECT item_id FROM user_votes WHERE user_email = ? AND item_type = "problem" AND item_id IN (?)',
+            [userEmail, problemIds],
+            (err2, voteResults) => {
+                if (err2) {
+                    console.error('Błąd pobierania głosów użytkownika:', err2);
+                    return res.status(500).json({ message: 'Błąd bazy danych' });
+                }
+
+                const votedIds = voteResults.map(v => v.item_id);
+                const problems = results.map(p => ({
+                    ...p,
+                    images: parseImagesField(p.images),
+                    hasVoted: votedIds.includes(p.id)
+                }));
+
+                db.query(
+                    `SELECT COUNT(*) AS voteCount 
+                     FROM user_votes 
+                     JOIN problems ON user_votes.item_id = problems.id 
+                     WHERE user_votes.user_email = ? AND user_votes.item_type = 'problem' AND problems.status = 'in_voting'`,
+                    [userEmail],
+                    (err3, voteCountResult) => {
+                        if (err3) {
+                            console.error('Błąd pobierania liczby głosów:', err3);
+                            return res.status(500).json({ message: 'Błąd bazy danych' });
+                        }
+
+                        res.json({
+                            problems,
+                            userVoteCount: voteCountResult[0].voteCount
+                        });
+                    }
+                );
+            }
+        );
     });
 });
 
-// pobieranie pomysłów
 app.get('/ideas', (req, res) => {
     const userEmail = req.headers['x-user-email'];
     const { status, archived, branch } = req.query;
@@ -610,54 +602,48 @@ app.get('/ideas', (req, res) => {
             return res.status(500).json({ message: 'Błąd bazy danych' });
         }
 
-        const ideaIds = results.map(idea => idea.id);
+        const ideaIds = results.map(i => i.id);
 
-        if (ideaIds.length > 0) {
-            db.query(
-                'SELECT idea_id FROM votes_ideas WHERE user_email = ? AND idea_id IN (?)',
-                [userEmail, ideaIds],
-                (err, voteResults) => {
-                    if (err) {
-                        console.error('Błąd bazy danych (głosy):', err);
-                        return res.status(500).json({ message: 'Błąd bazy danych' });
-                    }
-
-                    const votedIdeaIds = voteResults.map(vote => vote.idea_id);
-
-                    const ideas = results.map(idea => {
-                        const images = parseImagesField(idea.images);
-                        const hasVoted = votedIdeaIds.includes(idea.id);
-                        return { ...idea, images, hasVoted };
-                    });
-
-                    db.query(
-                        `SELECT COUNT(*) AS voteCount 
-                         FROM votes_ideas 
-                         JOIN ideas ON votes_ideas.idea_id = ideas.id 
-                         WHERE votes_ideas.user_email = ? AND ideas.status = 'in_voting'`,
-                        [userEmail],
-                        (err, voteCountResult) => {
-                            if (err) {
-                                console.error('Błąd bazy danych (licznik głosów):', err);
-                                return res.status(500).json({ message: 'Błąd bazy danych' });
-                            }
-
-                            const voteCount = voteCountResult[0].voteCount;
-
-                            res.json({
-                                ideas,
-                                userVoteCount: voteCount
-                            });
-                        }
-                    );
-                }
-            );
-        } else {
-            res.json({
-                ideas: results.map(idea => ({ ...idea, hasVoted: false })),
-                userVoteCount: 0
-            });
+        if (ideaIds.length === 0) {
+            return res.json({ ideas: [], userVoteCount: 0 });
         }
+
+        db.query(
+            'SELECT item_id FROM user_votes WHERE user_email = ? AND item_type = "idea" AND item_id IN (?)',
+            [userEmail, ideaIds],
+            (err2, voteResults) => {
+                if (err2) {
+                    console.error('Błąd bazy danych (głosy):', err2);
+                    return res.status(500).json({ message: 'Błąd bazy danych' });
+                }
+
+                const votedIds = voteResults.map(v => v.item_id);
+                const ideas = results.map(i => ({
+                    ...i,
+                    images: parseImagesField(i.images),
+                    hasVoted: votedIds.includes(i.id)
+                }));
+
+                db.query(
+                    `SELECT COUNT(*) AS voteCount 
+                     FROM user_votes 
+                     JOIN ideas ON user_votes.item_id = ideas.id 
+                     WHERE user_votes.user_email = ? AND user_votes.item_type = 'idea' AND ideas.status = 'in_voting'`,
+                    [userEmail],
+                    (err3, voteCountResult) => {
+                        if (err3) {
+                            console.error('Błąd bazy danych (licznik głosów):', err3);
+                            return res.status(500).json({ message: 'Błąd bazy danych' });
+                        }
+
+                        res.json({
+                            ideas,
+                            userVoteCount: voteCountResult[0].voteCount
+                        });
+                    }
+                );
+            }
+        );
     });
 });
 
@@ -666,53 +652,51 @@ app.post('/ideas/:id/vote', authenticateUser, (req, res) => {
     const ideaId = req.params.id;
     const userEmail = req.user.email;
 
-    console.log('==> GŁOSOWANIE: userEmail =', userEmail, 'ideaId =', ideaId);
-
-    db.query('SELECT author_email, votes FROM ideas WHERE id = ?', [ideaId], (err, ideaRows) => {
+    db.query('SELECT author_email, votes FROM ideas WHERE id = ?', [ideaId], (err, ideaResults) => {
         if (err) {
             console.error('Błąd SELECT idea:', err);
-            return res.status(500).json({ success: false, message: 'Błąd pobierania pomysłu' });
+            return res.status(500).json({ success: false, message: 'Błąd podczas pobierania pomysłu' });
         }
 
-        if (ideaRows.length === 0) {
-            console.warn('Brak pomysłu o podanym ID');
+        if (ideaResults.length === 0) {
             return res.status(404).json({ success: false, message: 'Idea not found' });
         }
 
-        const idea = ideaRows[0];
+        const idea = ideaResults[0];
         if (idea.author_email === userEmail) {
-            console.warn('Użytkownik próbował głosować na własny pomysł');
-            return res.status(403).json({ success: false, message: 'Nie można głosować na własny pomysł' });
+            return res.status(403).json({ success: false, message: 'Nie można oddać głosu na własny pomysł' });
         }
 
-        db.query('SELECT idea_id FROM votes_ideas WHERE idea_id = ? AND user_email = ?', [ideaId, userEmail], (err, voteRows) => {
+        const checkQuery = `
+            SELECT * FROM user_votes 
+            WHERE item_id = ? AND user_email = ? AND item_type = 'idea'
+        `;
+
+        db.query(checkQuery, [ideaId, userEmail], (err, voteResults) => {
             if (err) {
                 console.error('Błąd SELECT vote:', err);
-                return res.status(500).json({ success: false, message: 'Błąd sprawdzania głosu' });
+                return res.status(500).json({ success: false, message: 'Błąd podczas sprawdzania głosu' });
             }
 
-            const voteExists = voteRows.length > 0;
+            const voteExists = voteResults.length > 0;
             const newVoteCount = voteExists ? idea.votes - 1 : idea.votes + 1;
 
             const voteQuery = voteExists
-                ? 'DELETE FROM votes_ideas WHERE idea_id = ? AND user_email = ?'
-                : 'INSERT INTO votes_ideas (idea_id, user_email) VALUES (?, ?)';
-
-            console.log('voteExists:', voteExists, '| Zapytanie:', voteQuery);
+                ? 'DELETE FROM user_votes WHERE item_id = ? AND user_email = ? AND item_type = "idea"'
+                : 'INSERT INTO user_votes (item_id, user_email, item_type, created_at) VALUES (?, ?, "idea", NOW())';
 
             db.query(voteQuery, [ideaId, userEmail], (err) => {
                 if (err) {
                     console.error('Błąd INSERT/DELETE vote:', err);
-                    return res.status(500).json({ success: false, message: 'Błąd aktualizacji głosu' });
+                    return res.status(500).json({ success: false, message: 'Błąd podczas aktualizacji głosu' });
                 }
 
                 db.query('UPDATE ideas SET votes = ? WHERE id = ?', [newVoteCount, ideaId], (err) => {
                     if (err) {
                         console.error('Błąd UPDATE votes:', err);
-                        return res.status(500).json({ success: false, message: 'Błąd aktualizacji liczby głosów' });
+                        return res.status(500).json({ success: false, message: 'Błąd podczas zapisu liczby głosów' });
                     }
 
-                    console.log('Głosowanie zakończone sukcesem');
                     return res.status(200).json({
                         success: true,
                         message: 'Głosowanie zakończone sukcesem',
@@ -745,7 +729,12 @@ app.post('/problems/:id/vote', authenticateUser, (req, res) => {
             return res.status(403).json({ success: false, message: 'Nie można oddać głosu na własny problem' });
         }
 
-        db.query('SELECT problem_id FROM votes_problems WHERE problem_id = ? AND user_email = ?', [problemId, userEmail], (err, voteResults) => {
+        const checkQuery = `
+            SELECT * FROM user_votes
+            WHERE item_id = ? AND user_email = ? AND item_type = 'problem'
+        `;
+
+        db.query(checkQuery, [problemId, userEmail], (err, voteResults) => {
             if (err) {
                 console.error('Błąd SELECT vote:', err);
                 return res.status(500).json({ success: false, message: 'Błąd podczas sprawdzania głosu' });
@@ -755,8 +744,8 @@ app.post('/problems/:id/vote', authenticateUser, (req, res) => {
             const newVoteCount = voteExists ? problem.votes - 1 : problem.votes + 1;
 
             const voteQuery = voteExists
-                ? 'DELETE FROM votes_problems WHERE problem_id = ? AND user_email = ?'
-                : 'INSERT INTO votes_problems (problem_id, user_email) VALUES (?, ?)';
+                ? `DELETE FROM user_votes WHERE item_id = ? AND user_email = ? AND item_type = 'problem'`
+                : `INSERT INTO user_votes (item_id, user_email, item_type, created_at) VALUES (?, ?, 'problem', NOW())`;
 
             db.query(voteQuery, [problemId, userEmail], (err) => {
                 if (err) {
@@ -786,7 +775,7 @@ app.post('/problems/:id/vote', authenticateUser, (req, res) => {
 app.get('/admin/ideas', (req, res) => {
     const { archived } = req.query;
 
-    // Initialize the base queries
+
     let sqlQueryIdeas = 'SELECT * FROM ideas';
     let sqlQueryProblems = 'SELECT * FROM problems';
 
