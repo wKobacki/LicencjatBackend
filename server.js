@@ -13,7 +13,6 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT;
 
-// Konfiguracja połączenia z bazą danych
 const db = mysql.createConnection({
     host: process.env.DB_HOST,
     user: process.env.DB_USER,
@@ -60,7 +59,6 @@ function parseImagesField(imagesField) {
     return [];
 }
 
-// Konfiguracja przechowywania obrazów
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
         cb(null, 'uploads/');
@@ -84,7 +82,6 @@ const upload = multer({
 
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// Konfiguracja nodemailer
 const transporter = nodemailer.createTransport({
     service: process.env.EMAIL_SERVICE,
     auth: {
@@ -96,7 +93,6 @@ const transporter = nodemailer.createTransport({
     }
 });
 
-// Middleware do uwierzytelniania użytkownika
 function authenticateUser(req, res, next) {
     const userEmail = req.headers['x-user-email'];
 
@@ -120,8 +116,6 @@ function authenticateUser(req, res, next) {
     });
 }
 
-
-// Middleware do autoryzacji admina
 function authenticateAdmin(req, res, next) {
     const userEmail = req.headers['x-user-email'];
     if (!userEmail) {
@@ -140,7 +134,6 @@ function authenticateAdmin(req, res, next) {
     });
 }
 
-// Rejestracja nowego użytkownika 
 app.post('/register',
     [
         body('email').isEmail().withMessage('Nieprawidłowy adres e-mail'),
@@ -213,7 +206,6 @@ app.post('/register',
         }
     });
 
-// Weryfikacja kodu e-mail
 app.post('/verify-email',
     [
         body('email').isEmail().withMessage('Nieprawidłowy adres e-mail'),
@@ -271,8 +263,6 @@ app.post('/verify-reset-code', [
     });
 });
 
-
-// Ponowne wysyłanie kodu weryfikacyjnego
 app.post('/resend-verification-code',
     [
         body('email').isEmail().withMessage('Nieprawidłowy adres e-mail'),
@@ -317,7 +307,6 @@ app.post('/resend-verification-code',
         });
     });
 
-// Logowanie użytkownika z weryfikacją hasła
 app.post('/login',
     [
         body('email').isEmail().withMessage('Nieprawidłowy adres e-mail'),
@@ -346,7 +335,6 @@ app.post('/login',
         });
     });
 
-// Wysyłanie kodu resetu hasła
 app.post('/forgot-password',
     [
         body('email').isEmail().withMessage('Nieprawidłowy adres e-mail'),
@@ -384,7 +372,6 @@ app.post('/forgot-password',
         });
     });
 
-// Resetowanie hasła z walidacją i hashowaniem nowego hasła
 app.post('/reset-password',
     [
         body('email').isEmail().withMessage('Nieprawidłowy adres e-mail'),
@@ -420,7 +407,6 @@ app.post('/reset-password',
         });
     });
 
-// Zgłaszanie pomysłu z walidacją
 app.post('/submitIdea', upload.array('images', 3), authenticateUser,
     [
         body('title').notEmpty().withMessage('Tytuł jest wymagany'),
@@ -459,7 +445,6 @@ app.post('/submitIdea', upload.array('images', 3), authenticateUser,
         });
     });
 
-// Zgłaszanie problemu z walidacją
 app.post('/submitProblem', upload.array('images', 3), authenticateUser,
     [
         body('title').notEmpty().withMessage('Tytuł jest wymagany'),
@@ -498,7 +483,6 @@ app.post('/submitProblem', upload.array('images', 3), authenticateUser,
         });
     });
 
-// Pobieranie problemów
 app.get('/problems', (req, res) => {
     const userEmail = req.headers['x-user-email'];
     const { status, archived, branch } = req.query;
@@ -647,7 +631,6 @@ app.get('/ideas', (req, res) => {
     });
 });
 
-//głosowanie na ideas
 app.post('/ideas/:id/vote', authenticateUser, (req, res) => {
     const ideaId = req.params.id;
     const userEmail = req.user.email;
@@ -709,7 +692,6 @@ app.post('/ideas/:id/vote', authenticateUser, (req, res) => {
     });
 });
 
-//głosowanie na problems
 app.post('/problems/:id/vote', authenticateUser, (req, res) => {
     const problemId = req.params.id;
     const userEmail = req.user.email;
@@ -771,7 +753,6 @@ app.post('/problems/:id/vote', authenticateUser, (req, res) => {
     });
 });
 
-// Pobieranie pomysłów i problemów do zarządzania przez admina
 app.get('/admin/ideas', (req, res) => {
     const { archived } = req.query;
 
@@ -833,7 +814,6 @@ app.get('/admin/ideas', (req, res) => {
     });
 });
 
-// Aktualizacja statusu pomysłu lub problemu
 app.put('/admin/:type/:id/status', authenticateAdmin, (req, res) => {
     const itemId = parseInt(req.params.id);
     const { status } = req.body;
@@ -867,7 +847,6 @@ app.put('/admin/:type/:id/status', authenticateAdmin, (req, res) => {
     );
 });
 
-// Usuwanie elementu (problemu)
 app.delete('/admin/problems/:id', authenticateAdmin, (req, res) => {
     const problemId = parseInt(req.params.id, 10);
     if (isNaN(problemId) || problemId <= 0) {
@@ -888,7 +867,6 @@ app.delete('/admin/problems/:id', authenticateAdmin, (req, res) => {
     });
 });
 
-// Usuwanie elementu (pomysłu)
 app.delete('/admin/ideas/:id', (req, res) => {
     const ideaId = parseInt(req.params.id, 10);
     console.log(`Received request to delete idea with ID: ${ideaId}`);
@@ -914,7 +892,6 @@ app.delete('/admin/ideas/:id', (req, res) => {
     });
 });
 
-// Archiwizacja elementu
 app.put('/admin/:type/:id/archive', authenticateAdmin, (req, res) => {
     const itemId = parseInt(req.params.id);
     const { archived } = req.body;
@@ -931,7 +908,6 @@ app.put('/admin/:type/:id/archive', authenticateAdmin, (req, res) => {
     });
 });
 
-// Aktualizacja roli użytkownika
 app.put('/admin/users/:id/role', authenticateUser, (req, res) => {
     const { role } = req.body;
     const id = parseInt(req.params.id, 10); 
@@ -947,7 +923,6 @@ app.put('/admin/users/:id/role', authenticateUser, (req, res) => {
     });
 });
 
-// Zmiana oddziału użytkownika
 app.put('/admin/users/:id/branch', authenticateAdmin, (req, res) => {
     const userId = parseInt(req.params.id);
     const { branch } = req.body;
@@ -958,7 +933,6 @@ app.put('/admin/users/:id/branch', authenticateAdmin, (req, res) => {
     });
 });
 
-// Blokowanie lub odblokowywanie użytkownika
 app.put('/admin/users/:id/block', authenticateAdmin, (req, res) => {
     const userId = parseInt(req.params.id);
     const { isBlocked } = req.body;
@@ -969,7 +943,6 @@ app.put('/admin/users/:id/block', authenticateAdmin, (req, res) => {
     });
 });
 
-//usuwanie użytkowników
 app.delete('/admin/users/:id', authenticateUser, (req, res) => {
     const userId = req.params.id;
 
@@ -1032,7 +1005,6 @@ app.delete('/admin/users/:id', authenticateUser, (req, res) => {
     });
 });
 
-// Pobieranie użytkowników
 app.get('/admin/users', authenticateAdmin, (req, res) => {
     db.query('SELECT id, email, role, name, surname, branch, isVerified, isBlocked FROM users', (err, results) => {
         if (err) return res.status(500).json({ message: 'Błąd bazy danych' });
@@ -1040,7 +1012,6 @@ app.get('/admin/users', authenticateAdmin, (req, res) => {
     });
 });
 
-// Zmiana hasła z walidacją i hashowaniem nowego hasła
 app.post('/changePassword', authenticateUser,
     [
         body('oldPassword').notEmpty().withMessage('Stare hasło jest wymagane'),
@@ -1072,7 +1043,6 @@ app.post('/changePassword', authenticateUser,
         });
     });
 
-// Sprawdzanie statusu użytkownika (czy jest zablokowany)
 app.get('/admin/users/status', authenticateUser, (req, res) => {
     const userEmail = req.user.email;
     db.query('SELECT isBlocked FROM users WHERE email = ?', [userEmail], (err, results) => {
@@ -1081,7 +1051,6 @@ app.get('/admin/users/status', authenticateUser, (req, res) => {
     });
 });
 
-// Dodanie komentarza
 app.post('/comments', (req, res) => {
     const { item_id, item_type, parent_id, content } = req.body;
     const author_email = req.headers['x-user-email']
@@ -1097,7 +1066,6 @@ app.post('/comments', (req, res) => {
     });
 });
 
-// Pobieranie komentarzy (zagnieżdżone)
 app.get('/comments', (req, res) => {
     const { item_id, item_type } = req.query;
     const userEmail = req.headers['x-user-email'] || null;
@@ -1167,8 +1135,6 @@ app.get('/comments', (req, res) => {
     });
 });
 
-
-//glosowanie na kom
 app.post('/comments/:id/like', authenticateUser, (req, res) => {
     const commentId = req.params.id;
     const userEmail = req.user.email;
@@ -1197,7 +1163,6 @@ app.post('/comments/:id/like', authenticateUser, (req, res) => {
     });
 });
 
-//usuwanie głosu na kom
 app.delete('/comments/:id/like', authenticateUser, (req, res) => {
     const commentId = req.params.id;
     const userEmail = req.user.email;
@@ -1221,7 +1186,6 @@ app.delete('/comments/:id/like', authenticateUser, (req, res) => {
     });
 });
 
-// Usuwanie komentarza przez administratora
 app.delete('/admin/comments/:id', async (req, res) => {
     const commentId = parseInt(req.params.id, 10);
     const userEmail = req.headers['x-user-email'];
@@ -1277,7 +1241,6 @@ app.delete('/admin/comments/:id', async (req, res) => {
     });
 });
 
-// Pobieranie wszystkich komentarzy dla administratora
 app.get('/admin/comments', (req, res) => {
     const sql = `
         SELECT id, item_id, item_type, parent_id, author_email, content, created_at
@@ -1295,13 +1258,10 @@ app.get('/admin/comments', (req, res) => {
     });
 });
 
-
-// Wylogowanie użytkownika
 app.post('/logout', (req, res) => {
     res.status(200).json({ message: 'Wylogowano pomyślnie' });
 });
 
-// Uruchomienie serwera
 app.listen(PORT, () => {
     console.log(`Serwer działa na porcie ${PORT}`);
 });
