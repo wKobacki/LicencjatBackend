@@ -1225,17 +1225,27 @@ app.delete('/admin/comments/:id', async (req, res) => {
 
         db.query('SELECT id, parent_id FROM comments', (err2, allComments) => {
             if (err2) {
+                console.error("Błąd przy pobieraniu komentarzy:", err2);
                 return res.status(500).json({ message: 'Błąd przy pobieraniu komentarzy' });
             }
 
             const idsToDelete = getAllChildCommentIds(allComments, commentId);
+            const placeholders = idsToDelete.map(() => '?').join(', ');
 
-            db.query('DELETE FROM comments WHERE id IN (?)', [idsToDelete], (err3) => {
-                if (err3) {
-                    return res.status(500).json({ message: 'Błąd podczas usuwania komentarzy' });
+            db.query(`DELETE FROM comment_likes WHERE comment_id IN (${placeholders})`, idsToDelete, (errLikes) => {
+                if (errLikes) {
+                    console.error("Błąd podczas usuwania lajków:", errLikes);
+                    return res.status(500).json({ message: 'Błąd podczas usuwania lajków komentarzy' });
                 }
 
-                return res.status(200).json({ message: 'Komentarz i jego odpowiedzi zostały usunięte' });
+                db.query(`DELETE FROM comments WHERE id IN (${placeholders})`, idsToDelete, (err3) => {
+                    if (err3) {
+                        console.error("Błąd podczas usuwania komentarzy:", err3);
+                        return res.status(500).json({ message: 'Błąd podczas usuwania komentarzy' });
+                    }
+
+                    return res.status(200).json({ message: 'Komentarz i jego odpowiedzi zostały usunięte' });
+                });
             });
         });
     });
